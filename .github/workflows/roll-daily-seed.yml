@@ -1,0 +1,66 @@
+name: roll-daily-seed
+on:
+  schedule:
+    - cron: "0 0 * * *" 
+  workflow_dispatch:
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Compute seed
+        id: seed
+        shell: bash
+        run: |
+          YMD=$(date -u +%Y%m%d)
+          SALT="${{ secrets.SEED_SALT }}"
+          HEX=$(printf '%s' "${YMD}${SALT}" | sha256sum | cut -d' ' -f1)
+          A=${HEX:0:8}
+          B=${HEX:8:8}
+          N=$(( ((16#$A) ^ (16#$B)) % 100000000 ))
+          if (( N < 0 )); then N=$((N + 100000000)); fi
+          printf -v SEED "%08d" "$N"
+          echo "seed=$SEED" >> "$GITHUB_OUTPUT"
+          echo "ymd=$YMD"   >> "$GITHUB_OUTPUT"
+
+      - name: Write seed to Firestore
+        env:
+          PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          SEED: ${{ steps.seed.outputs.seed }}
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          ACCESS_TOKEN=$(gcloud auth application-default print-access-token)
+          BODY=$(jq -n \
+            --arg PROJECT_ID "$PROJECT_ID" \
+            --arg SEED "$SEED" \
+            '{
+              writes: [
+                {
+                  update: {
+                    name: ("projects/" + $PROJECT_ID + "/databases/(default)/documents/daily_leaderboard/" + $SEED),
+                    fields: {}
+                  }
+                },
+                {
+                  transform: {
+                    document: ("projects/" + $PROJECT_ID + "/databases/(default)/documents/daily_leaderboard/" + $SEED),
+                    fieldTransforms: [
+                      { fieldPath: "date_created", setToServerValue: "REQUEST_TIME" }
+                    ]
+                  }
+                }
+              ]
+            }')
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "${BODY}" \
+            "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:commit"
