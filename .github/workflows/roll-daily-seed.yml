@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           YMD=$(date -u +%Y%m%d)
-          SALT="3nJkTq7!wPzL0aR9dFsB1yXmVc"
+          SALT="${{ secrets.SEED_SALT }}"
           HEX=$(printf '%s' "${YMD}${SALT}" | sha256sum | cut -d' ' -f1)
           A=${HEX:0:8}
           B=${HEX:8:8}
